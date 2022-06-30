@@ -33,7 +33,6 @@ static const uint8_t SD_CHIP_SELECT = PB12;
 #define TEST_SIGNAL PA8
 
 #define CHANNEL_1 PB0
-#define CHANNEL_2 PB1
 
 static const uint16_t BLACK = 0x0000;
 static const uint16_t BLUE = 0x001F;
