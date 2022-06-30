@@ -361,7 +361,10 @@ void splashscreen() {
 	tft.setCursor(15, 100);
 	tft.setTextColor(YELLOW);
 	tft.setTextSize(3);
-	tft.println("GameInstance.com");
+	tft.println("STM32 ToyScope");
+	tft.setCursor(15, 150);
+	tft.setTextSize(1);
+	tft.println("Original by GameInstance.com");
 	//    analogWrite(TEST_SIGNAL, 127);
 	delay(500);
 	tft.fillScreen(BACKGROUND_COLOR);
@@ -751,7 +754,7 @@ void drawTitleBar() {
 		tft.setCursor(215, 3);
 		tft.setTextColor(BLACK);
 		tft.setTextSize(1);
-		tft.print("GameInstance.com");
+		tft.print("ToyScope");
 	}
 
 	if (freezeMode == 3) {
