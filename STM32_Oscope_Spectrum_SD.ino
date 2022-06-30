@@ -19,14 +19,21 @@
 #define TFT_RST     PA2
 #define TFT_LED     PA3 // Backlight
 
-static const uint8_t SD_CHIP_SELECT = PB12;
-static const uint8_t TIME_BUTTON = PA15;
-static const uint8_t TRIGGER_BUTTON = PB10;
-static const uint8_t FREEZE_BUTTON = PB11;
-static const uint8_t TEST_SIGNAL = PA8;
+#define ENC_BUTTON PB7
+#define ENC_CLK PB8
+#define ENC_DATA PB9
+volatile static bool encoderDown = false;
+volatile static bool encoderUp = false;
+volatile static uint8_t encSetting = 0;
 
-static const uint8_t CHANNEL_1 = PB0;
-static const uint8_t CHANNEL_2 = PB1;
+static const uint8_t SD_CHIP_SELECT = PB12;
+// static const uint8_t TIME_BUTTON = PA15;
+// static const uint8_t TRIGGER_BUTTON = PB10;
+// static const uint8_t FREEZE_BUTTON = PB11;
+#define TEST_SIGNAL PA8
+
+#define CHANNEL_1 PB0
+#define CHANNEL_2 PB1
 
 static const uint16_t BLACK = 0x0000;
 static const uint16_t BLUE = 0x001F;
@@ -66,42 +73,36 @@ uint8_t bk[SCREEN_HORIZONTAL_RESOLUTION];
 uint16_t data16[BUFFER_SIZE];
 uint32_t data32[BUFFER_SIZE];
 uint32_t y[BUFFER_SIZE];
-uint8_t time_base = 7;
+uint8_t timeBase = 7;
 uint16_t i, j;
 uint8_t state = 0;
 uint16_t maxy, avgy, miny;
 
-volatile uint8_t h = 1, h2 = -1;
-volatile uint8_t trigger = 1, freeze = 0;
-volatile bool bPress[3], bTitleChange = true, bScreenChange = true;
-volatile static bool dma1_ch1_Active;
+uint8_t h = 1, h2 = -1;
+uint8_t trigger = 1;
+uint8_t freezeMode = 0;
+bool bTitleChange = true, bScreenChange = true; // bPress[3],
+static bool dma1_ch1_Active;
+static uint8_t encoderVal = 0;
 
-bool wasPressed(int pin, int index) {
-	if (HIGH == digitalRead(pin)) {
-		// isn't pressed
-		if (bPress[index]) {
-			// but was before
-			bPress[index] = false;
-		}
-		return false;
+void encoderRead(void) {
+	encoderVal = (encoderVal << 2) & 0x0f; // left 2 bits now contain the previous AB key read-out;
+	encoderVal |= (digitalRead(ENC_CLK) << 1) | digitalRead(ENC_DATA);
+	switch (encoderVal) {
+		case 0x0d: encoderUp = true;
+			encoderDown = false;
+			break;
+		case 0x0e: encoderUp = false;
+			encoderDown = true;
+			break;
 	}
-
-	// is pressed
-	if (!bPress[index]) {
-		// and wasn't before
-		bPress[index] = true;
-		return true;
-	}
-
-	// but was before
-	return false;
 }
 
 // ------------------------------------------------------------------------------------
 // The following section was inspired by http://www.stm32duino.com/viewtopic.php?t=1145
 
 void setADCs() {
-	switch (DT_PRE[time_base]) {
+	switch (DT_PRE[timeBase]) {
 		case 0: rcc_set_prescaler(RCC_PRESCALER_ADC, RCC_ADCPRE_PCLK_DIV_2);
 			break;
 		case 1: rcc_set_prescaler(RCC_PRESCALER_ADC, RCC_ADCPRE_PCLK_DIV_4);
@@ -113,7 +114,7 @@ void setADCs() {
 		default: rcc_set_prescaler(RCC_PRESCALER_ADC, RCC_ADCPRE_PCLK_DIV_8);
 	}
 
-	switch (DT_SMPR[time_base]) {
+	switch (DT_SMPR[timeBase]) {
 		case 0: adc_set_sample_rate(ADC1, ADC_SMPR_1_5);
 			break;
 		case 1: adc_set_sample_rate(ADC1, ADC_SMPR_7_5);
@@ -343,12 +344,14 @@ void setup() {
 	tft.begin();
 	tft.setRotation(3);
 
-	bPress[0] = false;
-	bPress[1] = false;
-	bPress[2] = false;
-
 	pinMode(TFT_LED, OUTPUT);
 	digitalWrite(TFT_LED, HIGH);
+
+	pinMode(ENC_CLK, INPUT);
+	pinMode(ENC_DATA, INPUT);
+	pinMode(ENC_BUTTON, INPUT_PULLUP);
+
+	systick_attach_callback(&encoderRead);
 
 	adc_calibrate(ADC1);
 }
@@ -360,37 +363,144 @@ void splashscreen() {
 	tft.setTextSize(3);
 	tft.println("GameInstance.com");
 	//    analogWrite(TEST_SIGNAL, 127);
-	delay(1500);
+	delay(500);
 	tft.fillScreen(BACKGROUND_COLOR);
 }
 
+unsigned long prevMs;
 void buttonsCheck() {
-	if (wasPressed(TIME_BUTTON, 0)) {
-		// toggling the time division modes
-		time_base++;
-		if (trigger == 0) {
-			// spectrum
-			if (time_base <= 2) {
-				time_base = 3;
+	// if (wasPressed(TIME_BUTTON, 0)) {
+	// 	// toggling the time division modes
+	// 	time_base++;
+	// 	if (trigger == 0) {
+	// 		// spectrum
+	// 		if (time_base <= 2) {
+	// 			time_base = 3;
+	// 		}
+	// 	}
+	// 	time_base = time_base % sizeof(DT_DT);
+	// 	h = DT_DT[time_base];
+	// 	bScreenChange = true;
+	// }
+
+	// if (wasPressed(TRIGGER_BUTTON, 1)) {
+	// 	// toggling the trigger mode
+	// 	// trigger++;
+	// 	// trigger = trigger % 4;
+	// 	// bScreenChange = true;
+	// 	// bTitleChange = true;
+	// }
+
+	// if (wasPressed(FREEZE_BUTTON, 2)) {
+	// 	// toggling the freeze screen
+	// 	// freeze = (freeze > 0) ? 0 : 3;
+	// 	// bTitleChange = true;
+	// }
+
+	unsigned long ms = millis();
+	if (ms - prevMs > 120) {
+		int encState = digitalRead(ENC_BUTTON);
+		if (encState == 0) {
+			encSetting++;
+			if (encSetting > 6) {
+				encSetting = 0;
 			}
+			prevMs = ms;
 		}
-		time_base = time_base % sizeof(DT_DT);
-		h = DT_DT[time_base];
-		bScreenChange = true;
 	}
 
-	if (wasPressed(TRIGGER_BUTTON, 1)) {
-		// toggling the trigger mode
-		trigger++;
-		trigger = trigger % 4;
-		bScreenChange = true;
-		bTitleChange = true;
-	}
+	if (encoderDown || encoderUp) {
+		switch (encSetting) {
+			case 0: // 0 - timebase
+				if (encoderDown) {
+					if (timeBase == 0) {
+						timeBase = 10;
+					} else {
+						timeBase--;
+					}
+				} else {
+					if (timeBase >= 10) {
+						timeBase == 0;
+					} else {
+						timeBase++;
+					}
+				}
 
-	if (wasPressed(FREEZE_BUTTON, 2)) {
-		// toggling the freeze screen
-		freeze = (freeze > 0) ? 0 : 3;
-		bTitleChange = true;
+				if (trigger == 0) {
+					// spectrum
+					if (timeBase <= 2) {
+						timeBase = 3;
+					}
+				}
+				timeBase = timeBase % sizeof(DT_DT);
+				h = DT_DT[timeBase];
+				bScreenChange = true;
+
+				break;
+			case 1: // 1 - x zoom
+				// if (encoderDown) {
+				// 	decreaseZoomFactor();
+				// }
+				// else {
+				// 	increaseZoomFactor();
+				// }
+
+				break;
+			case 2: // 1 - y zoom
+				// if (encoderDown) {
+				// 	decreaseYZoomFactor();
+				// }
+				// else {
+				// 	increaseYZoomFactor();
+				// }
+
+				break;
+			case 3: // 2 - scroll
+				// if (encoderDown) {
+				// 	scrollRight();
+				// }
+				// else {
+				// 	scrollLeft();
+				// }
+
+				break;
+			case 4: // 3 - edge type
+				// toggling the trigger mode
+
+				// if (encoderDown) {
+				// 	trigger--;
+				// }
+				// else {
+				// 	trigger++;
+				// }
+				//
+				// trigger = trigger % 4;
+				// bScreenChange = true;
+				// bTitleChange = true;
+				break;
+
+			case 5: // 4 - y position
+				// if (encoderDown) {
+				// 	decreaseYposition();
+				// }
+				// else {
+				// 	increaseYposition();
+				// }
+
+				break;
+			case 6: // 5 - trigger position
+				// if (encoderDown) {
+				// 	decreaseTriggerPosition();
+				// }
+				// else {
+				// 	increaseTriggerPosition();
+				// }
+
+				break;
+		}
+
+		encoderDown = false;
+		encoderUp = false;
 	}
 }
 
@@ -406,8 +516,7 @@ void acquisition() {
 	dma1_ch1_Active = 1;
 	dma_enable(DMA1, DMA_CH1);                     // enable the DMA channel and start the transfer
 
-	while (dma1_ch1_Active) {
-	};                     // waiting for the DMA to complete
+	while (dma1_ch1_Active) {};                    // waiting for the DMA to complete
 	dma_disable(DMA1, DMA_CH1);                    // end of DMA trasfer
 
 	real_to_complex(data16, data32, BUFFER_SIZE);  // data format conversion
@@ -515,7 +624,7 @@ void displaySignalScreen() {
 			);
 			if (i % DIVISION_SIZE == 0) {
 				//
-				float freq = ((float)i / (float)SCREEN_HORIZONTAL_RESOLUTION * (float)DT_FS[time_base]) / 2.0;
+				float freq = ((float)i / (float)SCREEN_HORIZONTAL_RESOLUTION * (float)DT_FS[timeBase]) / 2.0;
 				tft.setCursor(
 					i - (freq > 100 ? 8 : 5) - (freq > (int)freq ? 4 : 0), SCREEN_VERTICAL_RESOLUTION - 7
 				);
@@ -529,7 +638,7 @@ void displaySignalScreen() {
 		tft.setTextSize(1);
 		String s;
 		s = "F: ";
-		s += (float)max_x / (float)BUFFER_SIZE * (float)DT_FS[time_base];
+		s += (float)max_x / (float)BUFFER_SIZE * (float)DT_FS[timeBase];
 		s += "kHz ";
 		s += (float)20 * log10(max_y);
 		s += "dB";
@@ -607,12 +716,12 @@ void drawTitleBar() {
 		s += "V ";
 		if (trigger == 0) {
 			// spectrum
-			s += (int)DT_FS[time_base];
+			s += (int)DT_FS[timeBase];
 			s += "kHz ";
 		}
 		else {
 			// time samples
-			s += DT_DIV[time_base];
+			s += DT_DIV[timeBase];
 			s += "us ";
 		}
 		if (trigger == 1) {
@@ -632,7 +741,7 @@ void drawTitleBar() {
 			s += "Spectrum ";
 		}
 		tft.print(s);
-		if (freeze) {
+		if (freezeMode) {
 			//
 			tft.setCursor(170, 3);
 			tft.setTextColor(RED);
@@ -645,8 +754,8 @@ void drawTitleBar() {
 		tft.print("GameInstance.com");
 	}
 
-	if (freeze == 3) {
-		freeze = 1;
+	if (freezeMode == 3) {
+		freezeMode = 1;
 		export_to_sd();
 		bScreenChange = true;
 	}
@@ -666,7 +775,7 @@ void loop() {
 	if (state == 2) {
 		// buttons check
 		buttonsCheck();
-		if (freeze) {
+		if (freezeMode) {
 			// frozen screen
 			state = 5;
 		}
